@@ -5,7 +5,7 @@ reference. Only public headers; no comments in `.cpp`.
 
 ## Module preamble
 
-The module's umbrella header (`<namespace_dir>/<Module>/<Module>.h`, or
+The module's umbrella header (`<namespace_dir>/<Module>/<Module>.h` or `<Module>/<namespace_dir><Module>.h`, any case, or
 `<namespace_dir>/<namespace_dir>.h` for the root module) opens with a `@file`
 block: what the module is for, its main entry points, which platforms have it
 (the build gate, if any), and the two or three rules an agent gets wrong

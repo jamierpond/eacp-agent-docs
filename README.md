@@ -81,7 +81,7 @@ patterns = ['Miro/A\.h', 'Miro/B\.h']
 ```
 
 A module is the first folder under `namespace_dir`. Its preamble is the
-`@file` block of its umbrella header (`<Module>/<Module>.h`), or a `@dir`
+`@file` block of its umbrella header (`<Module>/<Module>.h` or `<Module>/<namespace_dir><Module>.h`, any case), or a `@dir`
 block in a `.dox` file. `DocCommentStyle.md` is how to write the comments.
 
 ## Where it publishes

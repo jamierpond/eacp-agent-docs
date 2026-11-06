@@ -600,9 +600,12 @@ class Header:
         return get_first_sentence(self.description) if self.description else ""
 
     def is_umbrella(self):
+        stem = self.get_stem().lower()
         if self.is_in_root_module():
-            return self.include_path == f"{NAMESPACE_DIR}/{NAMESPACE_DIR}.h"
-        return self.include_path == f"{NAMESPACE_DIR}/{self.get_module()}/{self.get_module()}.h"
+            return stem == NAMESPACE_DIR.lower()
+        module = self.get_module().lower()
+        is_directly_in_module = len(self.include_path.split("/")) == 3
+        return is_directly_in_module and stem in (module, NAMESPACE_DIR.lower() + module)
 
     def is_internal(self):
         return self.description.startswith(INTERNAL_HEADER_PREFIX)
@@ -638,14 +641,14 @@ def collect_type_entry(compound):
     qualified_name = get_text(compound.find("compoundname"))
     kind = compound.get("kind")
     template = get_template_prefix(compound)
-    public_bases = [base for base in compound.findall("basecompoundref")
-                    if base.get("prot") == "public"
-                    and not re.search(r"\b[Dd]etail::", get_text(base))]
+    bases = [base for base in compound.findall("basecompoundref")
+             if not re.search(r"\b[Dd]etail::", get_text(base))]
+    public_bases = [base for base in bases if base.get("prot") == "public"]
     short_name = qualified_name.split("::")[-1]
     declaration = f"{template}{kind} {short_name}"
-    if public_bases:
-        declaration += " : " + ", ".join("public " + get_text(base)
-                                         for base in public_bases)
+    if bases:
+        declaration += " : " + ", ".join(f"{base.get('prot')} {get_text(base)}"
+                                         for base in bases)
     return TypeEntry(compound.get("id"), qualified_name, kind, declaration,
                      get_description_markdown(compound),
                      collect_public_members(compound, qualified_name),
@@ -1108,6 +1111,14 @@ def render_task_table(symbol_lookup):
     return lines
 
 
+def get_module_summary(preamble, module_headers):
+    if preamble:
+        return get_first_sentence(preamble)
+    if len(module_headers) == 1:
+        return module_headers[0].get_brief()
+    return ""
+
+
 def render_root_index(modules, module_preambles, symbol_lookup):
     lines = [
         f"# {NAME} API reference for agents", "",
@@ -1131,8 +1142,8 @@ def render_root_index(modules, module_preambles, symbol_lookup):
         lines += task_table + [""]
     lines += ["## Modules", ""]
     for module, module_headers in modules.items():
-        summary = get_first_sentence(module_preambles[module]) or \
-            f"{len(module_headers)} headers"
+        summary = get_module_summary(module_preambles[module], module_headers) or \
+            f"{len(module_headers)} header{'s' if len(module_headers) != 1 else ''}"
         lines.append(f"- [{module}]({module}/index.md): {summary}")
     return "\n".join(lines) + "\n"
 
@@ -1214,8 +1225,8 @@ def render_llms_txt(modules, module_preambles, symbol_lookup):
     lines += [f"- [Index](index.md): find by task, modules",
               f"- [Types](symbols.md): every public class and struct and its page", "",
               "## Modules", ""]
-    for module in modules:
-        summary = get_first_sentence(module_preambles[module])
+    for module, module_headers in modules.items():
+        summary = get_module_summary(module_preambles[module], module_headers)
         lines.append(f"- [{module}]({module}/index.md)" +
                      (f": {summary}" if summary else ""))
     task_lines = render_llms_txt_task_lines(symbol_lookup)
