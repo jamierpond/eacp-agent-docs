@@ -67,6 +67,7 @@ Other = "https://github.com/owner/other"
 [doxygen]
 file_patterns = ["*.h", "*.dox"]   # the default
 predefined = []
+plain_doc_comments = true          # the default: a // block above a declaration is its doc
 
 [platforms]                   # all optional; a "Platform:" line on pages
 file_suffixes = ["Windows", "Linux"]        # Foo-Windows.cpp is platform-only
@@ -83,6 +84,12 @@ patterns = ['Miro/A\.h', 'Miro/B\.h']
 A module is the first folder under `namespace_dir`. Its preamble is the
 `@file` block of its umbrella header (`<Module>/<Module>.h` or `<Module>/<namespace_dir><Module>.h`, any case), or a `@dir`
 block in a `.dox` file. `DocCommentStyle.md` is how to write the comments.
+
+With `plain_doc_comments` on, Doxygen reads every header through
+`scripts/plain_doc_comments.py`, which turns a plain `//` block directly above
+a declaration into `///` (and a `//` after an enumerator into `///<`) without
+moving any line, and `generate.py` prints a warning listing each such block so
+they move to `///` over time.
 
 ## Where it publishes
 

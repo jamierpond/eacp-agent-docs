@@ -10,6 +10,7 @@ Usage: generate.py [--config agent-docs.toml] [--out build/agent-docs] [--html [
 """
 
 import argparse
+import fnmatch
 import os
 import re
 import shutil
@@ -21,8 +22,11 @@ import xml.etree.ElementTree as ElementTree
 from collections import defaultdict
 from pathlib import Path
 
+from plain_doc_comments import find_plain_doc_comments
+
 TOOLS_ROOT = Path(__file__).resolve().parent.parent
 DOXYFILE_TEMPLATE = TOOLS_ROOT / "templates" / "Doxyfile"
+PLAIN_DOC_COMMENT_FILTER = TOOLS_ROOT / "scripts" / "plain_doc_comments.py"
 GETTING_STARTED_PAGE = "getting-started.md"
 MAX_OVERLOADS_SHOWN = 8
 MAX_PAGE_BYTES = 20000
@@ -139,11 +143,48 @@ def render_doxyfile():
         "EXCLUDE_SYMBOLS": " ".join(CONFIG.get("exclude_symbols", [])),
         "STRIP_FROM_PATH": CONFIG["include_root"],
         "PREDEFINED": " ".join(doxygen.get("predefined", [])),
+        "INPUT_FILTER": get_input_filter_command(),
     }
     text = DOXYFILE_TEMPLATE.read_text()
     for key, value in values.items():
         text = text.replace("@" + key + "@", value)
     return text
+
+
+def is_reading_plain_doc_comments():
+    return CONFIG.get("doxygen", {}).get("plain_doc_comments", True)
+
+
+def get_input_filter_command():
+    if not is_reading_plain_doc_comments():
+        return ""
+    return f"{sys.executable} {PLAIN_DOC_COMMENT_FILTER}"
+
+
+def list_doxygen_input_files():
+    patterns = CONFIG.get("doxygen", {}).get("file_patterns", ["*.h", "*.dox"])
+    excluded = CONFIG.get("exclude_patterns", [])
+    for root in CONFIG["header_roots"]:
+        for path in sorted((REPO_ROOT / root).rglob("*")):
+            relative = str(path.relative_to(REPO_ROOT))
+            if (path.is_file() and any(fnmatch.fnmatch(path.name, p) for p in patterns)
+                    and not any(fnmatch.fnmatch(relative, p) for p in excluded)):
+                yield path
+
+
+def warn_about_plain_doc_comments():
+    locations = []
+    for path in list_doxygen_input_files():
+        found = find_plain_doc_comments(path.read_text(errors="ignore"))
+        relative = path.relative_to(REPO_ROOT)
+        locations += [f"{relative}:{first + 1}" for first in found.get_first_lines()]
+    if not locations:
+        return
+    print(f"warning: {len(locations)} declarations are documented with // rather "
+          "than ///; they are read as docs for now, move them to /// when you touch "
+          "them:", file=sys.stderr)
+    for location in locations:
+        print(f"  {location}", file=sys.stderr)
 
 
 def run_doxygen(output_dir, overrides=None):
@@ -1348,6 +1389,8 @@ def main():
     args.xml = args.xml or str(REPO_ROOT / "build" / "agent-docs-xml")
     args.html_out = args.html_out or str(REPO_ROOT / "build" / "agent-docs-html")
     xml_dir = Path(args.xml).resolve()
+    if is_reading_plain_doc_comments():
+        warn_about_plain_doc_comments()
     run_doxygen(xml_dir)
     headers, module_preambles_by_directory = collect_headers_and_module_preambles(xml_dir)
     generate_markdown_atomically(headers, module_preambles_by_directory,

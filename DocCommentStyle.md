@@ -39,3 +39,12 @@ member. Say what the name can't:
 
 Never restate the name ("/// The timer class."). A self-explanatory getter gets
 nothing. Plain short sentences, no acronyms left unexpanded.
+
+## `///`, and `//` for now
+
+`///` is the style. A plain `//` block directly above a declaration is still
+read as its doc for now, so headers written before the reference existed need
+no sweep: `generate.py` lists every such block as a warning, and each moves to
+`///` when someone touches it. A `//` block is not read when it is inside a
+function body, starts with TODO, FIXME, XXX, HACK, clang-format or NOLINT,
+is mostly code, or has a blank line between it and the declaration.
