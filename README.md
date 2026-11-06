@@ -92,9 +92,10 @@ block in a `.dox` file. `DocCommentStyle.md` is how to write the comments.
 - on a tag push, also the tag, never rewritten;
 - on a push to the default branch, `latest` and the branch name;
 - on a push to `main`, `main` and `stable` (and `latest` if `main` is the default).
+- on a push to any other branch, its name with `/` turned into `-`.
 
 The named folders are replaced wholesale on every publish and served with a
-5-minute cache. Any other branch publishes its sha folder only.
+5-minute cache.
 
 ## Bucket and identity
 

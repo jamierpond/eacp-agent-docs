@@ -2,7 +2,7 @@
 # Prints the bucket refs for a push, as two lines: the comma-separated immutable
 # refs (the short sha, and the tag on a tag push), then the space-separated
 # aliases. The default branch gets "latest" and its name, main gets "main" and
-# "stable", and any other branch gets no alias.
+# "stable", and any other branch gets its name with "/" turned into "-".
 #
 # Usage: refs-for-push.sh <sha> <ref-type> <ref-name> <default-branch>
 set -euo pipefail
@@ -27,6 +27,8 @@ elif [[ $ref_name == main ]]; then
     fi
 elif [[ $ref_name == "$default_branch" ]]; then
     aliases=(latest "$ref_name")
+else
+    aliases=("${ref_name//\//-}")
 fi
 echo "$immutable"
 echo "${aliases[*]}"
