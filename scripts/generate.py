@@ -1113,7 +1113,7 @@ def render_task_table(symbol_lookup):
 
 def get_module_summary(preamble, module_headers):
     if preamble:
-        return get_first_sentence(preamble)
+        return get_first_sentence(preamble.split("\n\n")[0])
     if len(module_headers) == 1:
         return module_headers[0].get_brief()
     return ""
