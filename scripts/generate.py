@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Generates the agent-facing markdown API docs for eacp from Doxygen XML.
+"""Generates agent-facing markdown API docs for a C++ library from Doxygen XML.
 
+Everything repository-specific comes from agent-docs.toml (see the README).
 Every X.md is also rendered to X.html beside it, with links between pages
-pointing at the .html; that needs Python-Markdown (Scripts/llm-docs-requirements.txt).
+pointing at the .html; that needs Python-Markdown (requirements.txt). Every
+link is relative, so the tree can be served from any prefix.
 
-Usage: Scripts/generate-llm-docs.py [--out build/llm-docs] [--base-url URL] [--html [--html-out DIR] [--open]]
+Usage: generate.py [--config agent-docs.toml] [--out build/agent-docs] [--html [--html-out DIR] [--open]]
 """
 
 import argparse
@@ -14,63 +16,43 @@ import shutil
 import subprocess
 import sys
 import textwrap
+import tomllib
 import xml.etree.ElementTree as ElementTree
 from collections import defaultdict
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-LIB_ROOT = REPO_ROOT / "Lib"
-DOCS_ROOT = REPO_ROOT / "Docs" / "LLMDocs"
-DOXYFILE = DOCS_ROOT / "Doxyfile"
-TASKS_FILE = DOCS_ROOT / "Tasks.md"
-GETTING_STARTED_FILE = DOCS_ROOT / "GettingStarted.md"
+TOOLS_ROOT = Path(__file__).resolve().parent.parent
+DOXYFILE_TEMPLATE = TOOLS_ROOT / "templates" / "Doxyfile"
 GETTING_STARTED_PAGE = "getting-started.md"
-INTERNAL_HEADER_PREFIX = "Internal:"
 MAX_OVERLOADS_SHOWN = 8
 MAX_PAGE_BYTES = 20000
-CONTEXT_PLATFORMS = "Apple and Windows (EACP_HAS_CONTEXT)"
-CONTEXT_ONLY_HEADER_PATTERNS = [
-    r"eacp/Graphics/Graphics/GraphicsContext.*\.h", r"eacp/Graphics/Layers/.*",
-    r"eacp/Graphics/Primitives/Font\.h", r"eacp/Graphics/Primitives/TextMetrics\.h",
-    r"eacp/Graphics/Widgets/TextInput\.h"]
-DRAW_PLATFORMS = "Apple, Windows, Linux and Android"
-CAPTURE_PLATFORMS = "Apple, Windows and Android (EACP_HAS_CAPTURE)"
-VIDEO_PLATFORMS = "macOS and Windows (EACP_HAS_CAPTURE)"
-MODULE_PLATFORM_GATES = [
-    (r"eacp/ML/Model/.*", "Apple (EACP_HAS_COREML)"),
-    (r"eacp/ML/.*", "macOS, Windows and Linux (eacp-ml-graph)"),
-    (r"eacp/(Camera|CameraView)/.*", CAPTURE_PLATFORMS),
-    (r"eacp/(Video|VideoView)/.*", VIDEO_PLATFORMS),
-    (r"eacp/WebView/.*", "Apple and Windows (EACP_HAS_WEBVIEW)"),
-]
-MODULE_INDEX_PLATFORMS = {
-    "Core": "every platform", "Network": "every platform",
-    "Graphics": f"{DRAW_PLATFORMS} (EACP_HAS_DRAW)",
-    "GPU": f"{DRAW_PLATFORMS} (EACP_HAS_GPU)",
-    "GPUWidgets": f"{DRAW_PLATFORMS} (EACP_HAS_GPU)",
-    "Sprites": f"{DRAW_PLATFORMS} (EACP_HAS_GPU)",
-    "Text": f"{DRAW_PLATFORMS} (EACP_HAS_TEXT)",
-    "UI": f"{DRAW_PLATFORMS} (EACP_HAS_TEXT)",
-    "SVG": f"{DRAW_PLATFORMS} (EACP_HAS_TEXT)",
-    "Camera": CAPTURE_PLATFORMS, "CameraView": CAPTURE_PLATFORMS,
-    "Video": VIDEO_PLATFORMS, "VideoView": VIDEO_PLATFORMS,
-    "WebView": "Apple and Windows (EACP_HAS_WEBVIEW)",
-    "ML": "Graph on macOS, Windows and Linux; Model on Apple (EACP_HAS_COREML)",
-}
-USAGE_SEARCH_DIRS = ["Apps"]
 MAX_USAGE_LINKS = 2
-HIDDEN_NAMESPACE_PARTS = {"Detail", "detail", "Impl", "Test"}
 SOURCE_EXTENSIONS = {".h", ".cpp", ".mm", ".m", ".hpp"}
-PLATFORM_FILE_SUFFIXES = ["Windows", "Linux", "Android", "iOS", "Apple", "Posix",
-                          "macOS", "Default"]
-PLATFORM_DIRECTORIES = {"ObjC": "Apple (Objective-C)", "Android": "Android (JNI)",
-                        "Windows": "Windows (Direct3D 12)", "Apple": "Apple",
-                        "Linux": "Linux"}
 # Doxygen turns "--" into <ndash/> and "---" into <mdash/>; give the source text back.
 DOXYGEN_DASH_TEXT = {"ndash": "--", "mdash": "---"}
 OPERATOR_FAMILY_COLLAPSE_THRESHOLD = 4
-GITHUB_BLOB_URL = "https://github.com/eyalamirmusic/eacp/blob/develop/"
-EXTERNAL_REPOSITORIES = {"Miro": "https://github.com/eyalamirmusic/Miro"}
+
+# Set from agent-docs.toml by load_config().
+REPO_ROOT = Path.cwd()
+LIB_ROOT = REPO_ROOT
+NAME = ""
+NAMESPACE_DIR = ""
+SYMBOL_PREFIX = ""
+ROOT_MODULE = ""
+TASKS_FILE = None
+GETTING_STARTED_FILE = None
+INTERNAL_HEADER_PREFIX = "Internal:"
+CONTEXT_ONLY_HEADER_PATTERNS = []
+CONTEXT_PLATFORMS = ""
+MODULE_PLATFORM_GATES = []
+MODULE_INDEX_PLATFORMS = {}
+USAGE_SEARCH_DIRS = []
+HIDDEN_NAMESPACE_PARTS = set()
+PLATFORM_FILE_SUFFIXES = []
+PLATFORM_DIRECTORIES = {}
+GITHUB_BLOB_URL = ""
+EXTERNAL_REPOSITORIES = {}
+CONFIG = {}
 DOC_COMMENT_WRAP_WIDTH = 80
 
 PAGE_STYLE = """
@@ -94,6 +76,76 @@ HTML_OVERRIDES = {"GENERATE_HTML": "YES", "GENERATE_XML": "NO",
                   "SOURCE_BROWSER": "YES", "HTML_OUTPUT": "."}
 
 
+def load_config(config_path):
+    global REPO_ROOT, LIB_ROOT, NAME, NAMESPACE_DIR, SYMBOL_PREFIX, ROOT_MODULE
+    global TASKS_FILE, GETTING_STARTED_FILE, INTERNAL_HEADER_PREFIX
+    global CONTEXT_ONLY_HEADER_PATTERNS, CONTEXT_PLATFORMS, MODULE_PLATFORM_GATES
+    global MODULE_INDEX_PLATFORMS, USAGE_SEARCH_DIRS, HIDDEN_NAMESPACE_PARTS
+    global PLATFORM_FILE_SUFFIXES, PLATFORM_DIRECTORIES, GITHUB_BLOB_URL
+    global EXTERNAL_REPOSITORIES, CONFIG
+    CONFIG = tomllib.loads(config_path.read_text())
+    REPO_ROOT = config_path.parent
+    LIB_ROOT = REPO_ROOT / CONFIG["include_root"]
+    NAME = CONFIG["name"]
+    NAMESPACE_DIR = CONFIG.get("namespace_dir", NAME)
+    SYMBOL_PREFIX = CONFIG.get("namespace", NAMESPACE_DIR) + "::"
+    ROOT_MODULE = CONFIG.get("root_module", NAMESPACE_DIR)
+    TASKS_FILE = get_optional_repo_path(CONFIG.get("tasks_file"))
+    GETTING_STARTED_FILE = get_optional_repo_path(CONFIG.get("getting_started_file"))
+    INTERNAL_HEADER_PREFIX = CONFIG.get("internal_marker", "Internal:")
+    platforms = CONFIG.get("platforms", {})
+    CONTEXT_ONLY_HEADER_PATTERNS = []
+    CONTEXT_PLATFORMS = ""
+    for gate in platforms.get("header_gates", []):
+        CONTEXT_ONLY_HEADER_PATTERNS += gate["patterns"]
+        CONTEXT_PLATFORMS = gate["platforms"]
+    MODULE_PLATFORM_GATES = [(gate["pattern"], gate["platforms"])
+                             for gate in platforms.get("path_gates", [])]
+    MODULE_INDEX_PLATFORMS = platforms.get("modules", {})
+    PLATFORM_FILE_SUFFIXES = platforms.get("file_suffixes", [])
+    PLATFORM_DIRECTORIES = platforms.get("directories", {})
+    USAGE_SEARCH_DIRS = CONFIG.get("examples_dirs", [])
+    HIDDEN_NAMESPACE_PARTS = set(CONFIG.get("hidden_namespace_parts",
+                                            ["Detail", "detail", "Impl", "Test"]))
+    GITHUB_BLOB_URL = CONFIG["source_url"].rstrip("/") + "/"
+    EXTERNAL_REPOSITORIES = CONFIG.get("external_repositories", {})
+
+
+def get_optional_repo_path(relative_path):
+    return REPO_ROOT / relative_path if relative_path else None
+
+
+def has_getting_started_page():
+    return GETTING_STARTED_FILE is not None and GETTING_STARTED_FILE.exists()
+
+
+def get_module_key(module):
+    if module == ROOT_MODULE:
+        return NAMESPACE_DIR
+    return f"{NAMESPACE_DIR}/{module}"
+
+
+def get_directory_module_key(doxygen_directory_name):
+    return doxygen_directory_name.removeprefix(CONFIG["include_root"].rstrip("/") + "/")
+
+
+def render_doxyfile():
+    doxygen = CONFIG.get("doxygen", {})
+    values = {
+        "PROJECT_NAME": NAME,
+        "INPUT": " ".join(CONFIG["header_roots"]),
+        "FILE_PATTERNS": " ".join(doxygen.get("file_patterns", ["*.h", "*.dox"])),
+        "EXCLUDE_PATTERNS": " ".join(CONFIG.get("exclude_patterns", [])),
+        "EXCLUDE_SYMBOLS": " ".join(CONFIG.get("exclude_symbols", [])),
+        "STRIP_FROM_PATH": CONFIG["include_root"],
+        "PREDEFINED": " ".join(doxygen.get("predefined", [])),
+    }
+    text = DOXYFILE_TEMPLATE.read_text()
+    for key, value in values.items():
+        text = text.replace("@" + key + "@", value)
+    return text
+
+
 def run_doxygen(output_dir, overrides=None):
     if shutil.which("doxygen") is None:
         sys.exit("doxygen not found: brew install doxygen")
@@ -101,7 +153,7 @@ def run_doxygen(output_dir, overrides=None):
         shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True)
     settings = {**(overrides or {}), "OUTPUT_DIRECTORY": str(output_dir)}
-    config = DOXYFILE.read_text() + "\n" + "".join(
+    config = render_doxyfile() + "\n" + "".join(
         f"{key} = {value}\n" for key, value in settings.items())
     subprocess.run(["doxygen", "-"], input=config.encode(), cwd=REPO_ROOT,
                    check=True)
@@ -358,7 +410,7 @@ def get_header_path(element):
     if location is None:
         return None
     path = Path(location.get("file", ""))
-    if path.parts and path.parts[0] == "eacp":
+    if path.parts and path.parts[0] == NAMESPACE_DIR:
         return path.as_posix() if path.suffix == ".h" else None
     if not path.is_absolute():
         path = REPO_ROOT / path
@@ -524,11 +576,19 @@ class Header:
         self.types = []
         self.free_members = []
 
+    def is_in_root_module(self):
+        return len(self.include_path.split("/")) <= 2
+
     def get_module(self):
+        if self.is_in_root_module():
+            return ROOT_MODULE
         return self.include_path.split("/")[1]
 
     def get_page_path(self):
-        return self.include_path.removeprefix("eacp/").removesuffix(".h") + ".md"
+        below_namespace = self.include_path.removeprefix(f"{NAMESPACE_DIR}/")
+        if self.is_in_root_module():
+            below_namespace = f"{ROOT_MODULE}/{below_namespace}"
+        return below_namespace.removesuffix(".h") + ".md"
 
     def get_stem(self):
         return Path(self.include_path).stem
@@ -540,7 +600,9 @@ class Header:
         return get_first_sentence(self.description) if self.description else ""
 
     def is_umbrella(self):
-        return self.include_path == f"eacp/{self.get_module()}/{self.get_module()}.h"
+        if self.is_in_root_module():
+            return self.include_path == f"{NAMESPACE_DIR}/{NAMESPACE_DIR}.h"
+        return self.include_path == f"{NAMESPACE_DIR}/{self.get_module()}/{self.get_module()}.h"
 
     def is_internal(self):
         return self.description.startswith(INTERNAL_HEADER_PREFIX)
@@ -637,7 +699,7 @@ def collect_headers_and_module_preambles(xml_dir):
             compound = load_compound(xml_dir, compound_ref.get("refid"))
             description = get_description_markdown(compound)
             if description:
-                module_preambles_by_directory[name.removeprefix("Lib/")] = description
+                module_preambles_by_directory[get_directory_module_key(name)] = description
             continue
         if kind == "file":
             compound = load_compound(xml_dir, compound_ref.get("refid"))
@@ -677,7 +739,7 @@ def collect_headers_and_module_preambles(xml_dir):
     module_preambles = dict(module_preambles_by_directory)
     for header in headers.values():
         if header.is_umbrella() and header.description:
-            module_preambles[f"eacp/{header.get_module()}"] = header.description
+            module_preambles[get_module_key(header.get_module())] = header.description
     headers = {path: header for path, header in headers.items()
                if not header.is_empty() and not header.is_internal()}
     return headers, module_preambles
@@ -732,7 +794,9 @@ def github_link(repo_path):
 
 
 def is_example_app_file(repo_path):
-    return repo_path.startswith("Apps/") and "/Tests/" not in repo_path \
+    is_in_examples = any(repo_path.startswith(directory.rstrip("/") + "/")
+                         for directory in USAGE_SEARCH_DIRS)
+    return is_in_examples and "/Tests/" not in repo_path \
         and "/Test/" not in repo_path
 
 
@@ -754,9 +818,10 @@ def build_contextual_usage_patterns(header):
     bare_pattern = re.compile(r"\b(" + "|".join(sorted(bare)) + r")\b") \
         if bare else None
     module = header.get_module()
-    header_include_pattern = build_include_pattern(header.include_path.removeprefix("eacp/"))
+    header_include_pattern = build_include_pattern(header.include_path.removeprefix(f"{NAMESPACE_DIR}/"))
     umbrella_include_pattern = re.compile(
-        r'#\s*include\s*[<"](?:[^>"]*/)?eacp/(\w+)/\1\.h[>"]')
+        r'#\s*include\s*[<"](?:[^>"]*/)?' + re.escape(NAMESPACE_DIR) +
+        r'/(?:(\w+)/\1|' + re.escape(NAMESPACE_DIR) + r')\.h[>"]')
     namespaces = {name.rsplit("::", 1)[0] for name in qualified_names if "::" in name}
     namespace_segments = {namespace.rsplit("::", 1)[-1] for namespace in namespaces}
     using_namespace_pattern = re.compile(
@@ -767,8 +832,8 @@ def build_contextual_usage_patterns(header):
             umbrella_include_pattern, using_namespace_pattern)
 
 
-def build_include_pattern(path_below_eacp):
-    return re.compile(r'#\s*include\s*[<"](?:[^>"]*/)?' + re.escape(path_below_eacp)
+def build_include_pattern(path_below_namespace):
+    return re.compile(r'#\s*include\s*[<"](?:[^>"]*/)?' + re.escape(path_below_namespace)
                       + r'[>"]')
 
 
@@ -979,12 +1044,12 @@ def get_header_symbol_names(header):
 
 
 def render_module_index(module, module_headers, preamble):
-    lines = [f"# eacp {module}", ""]
+    lines = [f"# {NAME} {module}", ""]
     if preamble:
         lines += [preamble, ""]
     if module in MODULE_INDEX_PLATFORMS:
         lines += [f"Platform: {MODULE_INDEX_PLATFORMS[module]}.", ""]
-    readme = LIB_ROOT / "eacp" / module / "README.md"
+    readme = LIB_ROOT / NAMESPACE_DIR / module / "README.md"
     if readme.exists():
         repo_path = readme.relative_to(REPO_ROOT).as_posix()
         lines += [f"Module guide (design, rules, measurements): "
@@ -1006,6 +1071,8 @@ def render_module_index(module, module_headers, preamble):
 
 def read_task_rows():
     rows = []
+    if TASKS_FILE is None:
+        return rows
     for line in TASKS_FILE.read_text().splitlines():
         cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
         if len(cells) != 2 or cells[0] in ("task", "") or cells[0].startswith("---"):
@@ -1021,7 +1088,7 @@ def get_external_repository_link(symbol):
 def render_task_symbol_link(symbol, symbol_lookup):
     if symbol in symbol_lookup:
         page = symbol_lookup[symbol]
-        return f"[`{symbol.removeprefix('eacp::')}`]({page})"
+        return f"[`{symbol.removeprefix(SYMBOL_PREFIX)}`]({page})"
     external_link = get_external_repository_link(symbol)
     if external_link:
         return f"[`{symbol}`]({external_link})"
@@ -1040,14 +1107,19 @@ def render_task_table(symbol_lookup):
 
 def render_root_index(modules, module_preambles, symbol_lookup):
     lines = [
-        "# eacp API reference for agents", "",
-        "Generated from the headers under `Lib/eacp`. Before writing a helper, "
-        "search here for one that exists.", "",
-        f"- Start here: [Getting started]({GETTING_STARTED_PAGE}).",
+        f"# {NAME} API reference for agents", "",
+        f"Generated from the headers under `{' and '.join(CONFIG['header_roots'])}`. "
+        "Before writing a helper, search here for one that exists.", "",
+    ]
+    if has_getting_started_page():
+        lines.append(f"- Start here: [Getting started]({GETTING_STARTED_PAGE}).")
+    lines += [
         "- Search by name: grep [symbols.md](symbols.md) for types, or a module's "
         "`symbols.md` for every free function and enum.",
-        "- Hand-written reuse map: [Docs/Toolbox.md]"
-        f"({github_link('Docs/Toolbox.md')}).",
+    ]
+    lines += [f"- {link['label']}: [{link['path']}]({github_link(link['path'])})."
+              for link in CONFIG.get("index_links", [])]
+    lines += [
         "- Each header page lists its types, public members with their comments, "
         "free functions and the apps and tests that use them.", "",
     ]
@@ -1078,11 +1150,11 @@ def render_module_symbols_table(module, module_headers):
     rows = set()
     for header in module_headers:
         rows.update(collect_symbol_rows(header))
-    lines = [f"# eacp {module} symbols", "",
+    lines = [f"# {NAME} {module} symbols", "",
              "One line per header page: `page: symbols`. Operators are left out.", ""]
     names_by_page = defaultdict(list)
     for name, kind, page in sorted(rows):
-        names_by_page[page].append(name.removeprefix("eacp::"))
+        names_by_page[page].append(name.removeprefix(SYMBOL_PREFIX))
     for page, names in sorted(names_by_page.items()):
         link = relative_link(f"{module}/symbols.md", page)
         lines.append(f"- [{link}]({link}): " + ", ".join(dict.fromkeys(names)))
@@ -1090,7 +1162,7 @@ def render_module_symbols_table(module, module_headers):
 
 
 def render_slim_symbols_table(modules):
-    lines = ["# eacp types", "",
+    lines = [f"# {NAME} types", "",
              "Top-level classes and structs only. Nested types, free functions, enums and every member "
              "are in each module's `symbols.md`: "
              + ", ".join(f"[{module}]({module}/symbols.md)" for module in modules)
@@ -1103,7 +1175,7 @@ def render_slim_symbols_table(modules):
             for entry in header.types:
                 if entry.qualified_name.rsplit("::", 1)[0] in type_names:
                     continue
-                rows.add((entry.qualified_name.removeprefix("eacp::"),
+                rows.add((entry.qualified_name.removeprefix(SYMBOL_PREFIX),
                           header.get_page_path()))
     names_by_page = defaultdict(list)
     for name, page in sorted(rows):
@@ -1113,37 +1185,36 @@ def render_slim_symbols_table(modules):
     return "\n".join(lines) + "\n"
 
 
-def render_llms_txt_task_lines(symbol_lookup, base_url):
+def render_llms_txt_task_lines(symbol_lookup):
     lines = []
     for task, symbols in read_task_rows():
         names = [name.strip().strip("`") for name in symbols.split(" + ")]
         known = [name for name in names if name in symbol_lookup]
         if known:
             symbol = known[0]
-            lines.append(f"- [{symbol.removeprefix('eacp::')}]"
-                         f"({base_url}/{symbol_lookup[symbol]}): {task}")
+            lines.append(f"- [{symbol.removeprefix(SYMBOL_PREFIX)}]"
+                         f"({symbol_lookup[symbol]}): {task}")
     return lines
 
 
-def render_llms_txt(modules, module_preambles, symbol_lookup, base_url):
-    lines = ["# eacp", "",
-             "> Cross-platform C++20 framework: app lifecycle, graphics, GPU, text, "
-             "UI, networking. API reference generated from the headers.", "",
+def render_llms_txt(modules, module_preambles, symbol_lookup):
+    lines = [f"# {NAME}", "",
+             f"> {CONFIG['summary']} API reference generated from the headers.", "",
              "Each page is markdown. Header pages list types, public members with "
              "their comments, free functions and the apps and tests that use them. "
              "Search here for an existing helper before writing one.", "",
-             "## Docs", "",
-             f"- [Getting started]({base_url}/{GETTING_STARTED_PAGE}): read first",
-             f"- [Index]({base_url}/index.md): find by task, modules",
-             f"- [Types]({base_url}/symbols.md): every public class and struct "
-             "and its page", "",
-             "## Modules", ""]
+             "## Docs", ""]
+    if has_getting_started_page():
+        lines.append(f"- [Getting started]({GETTING_STARTED_PAGE}): read first")
+    lines += [f"- [Index](index.md): find by task, modules",
+              f"- [Types](symbols.md): every public class and struct and its page", "",
+              "## Modules", ""]
     for module in modules:
         summary = get_first_sentence(module_preambles[module])
-        lines.append(f"- [{module}]({base_url}/{module}/index.md)" +
+        lines.append(f"- [{module}]({module}/index.md)" +
                      (f": {summary}" if summary else ""))
     lines += ["", "## Find by task", ""]
-    lines += render_llms_txt_task_lines(symbol_lookup, base_url)
+    lines += render_llms_txt_task_lines(symbol_lookup)
     return "\n".join(lines) + "\n"
 
 
@@ -1178,8 +1249,8 @@ def render_page_as_html(markdown_module, markdown_text, page_path):
     title = html_escaping.escape(get_page_title(markdown_text, page_path.stem))
     return (f"<!DOCTYPE html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\n"
             f"<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
-            f"<title>{title} - eacp</title><style>{PAGE_STYLE}</style></head><body>\n"
-            f"<nav><a href=\"{root}index.html\">eacp docs</a> &middot; "
+            f"<title>{title} - {NAME}</title><style>{PAGE_STYLE}</style></head><body>\n"
+            f"<nav><a href=\"{root}index.html\">{NAME} docs</a> &middot; "
             f"<a href=\"{page_path.name}\">markdown</a></nav>\n"
             f"{link_markdown_pages_as_html(body)}\n"
             f"<footer><a href=\"{root}index.html\">Index</a></footer>\n"
@@ -1194,18 +1265,17 @@ def render_markdown_pages_as_html(out_dir):
             markdown_module, markdown_path.read_text(), page_path))
 
 
-def generate_markdown_atomically(headers, module_preambles_by_directory, out_dir,
-                                 base_url):
+def generate_markdown_atomically(headers, module_preambles_by_directory, out_dir):
     # Built beside the output and swapped in, so a reader never sees half a tree.
     staging_dir = out_dir.with_name(out_dir.name + ".building")
     if staging_dir.exists():
         shutil.rmtree(staging_dir)
-    generate_markdown(headers, module_preambles_by_directory, staging_dir, base_url)
+    generate_markdown(headers, module_preambles_by_directory, staging_dir)
     render_markdown_pages_as_html(staging_dir)
     replace_directory_atomically(staging_dir, out_dir)
 
 
-def generate_markdown(headers, module_preambles_by_directory, out_dir, base_url):
+def generate_markdown(headers, module_preambles_by_directory, out_dir):
     usage_files = read_usage_source_files()
     ordered = sorted(headers.values(), key=lambda header: header.include_path)
     type_lookup = build_type_page_lookup(ordered)
@@ -1215,7 +1285,7 @@ def generate_markdown(headers, module_preambles_by_directory, out_dir, base_url)
         write_file(out_dir, header.get_page_path(),
                    render_header_page(header, usage_files, type_lookup))
     modules = dict(sorted(modules.items()))
-    module_preambles = {module: module_preambles_by_directory.get(f"eacp/{module}", "")
+    module_preambles = {module: module_preambles_by_directory.get(get_module_key(module), "")
                         for module in modules}
     for module, module_headers in modules.items():
         write_file(out_dir, f"{module}/index.md",
@@ -1226,12 +1296,10 @@ def generate_markdown(headers, module_preambles_by_directory, out_dir, base_url)
     write_file(out_dir, "index.md",
                render_root_index(modules, module_preambles, symbol_lookup))
     write_file(out_dir, "symbols.md", render_slim_symbols_table(modules))
-    if GETTING_STARTED_FILE.exists():
+    if has_getting_started_page():
         write_file(out_dir, GETTING_STARTED_PAGE, GETTING_STARTED_FILE.read_text())
-    else:
-        print(f"warning: {GETTING_STARTED_FILE} missing", file=sys.stderr)
     write_file(out_dir, "llms.txt", render_llms_txt(modules, module_preambles,
-                                                    symbol_lookup, base_url))
+                                                    symbol_lookup))
 
 
 def open_with_platform_opener(path):
@@ -1251,20 +1319,22 @@ def generate_html_reference(html_dir, should_open):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--out", default=str(REPO_ROOT / "build" / "llm-docs"))
-    parser.add_argument("--xml", default=str(REPO_ROOT / "build" / "llm-docs-xml"))
+    parser.add_argument("--config", default="agent-docs.toml")
+    parser.add_argument("--out", help="default <repo>/build/agent-docs")
+    parser.add_argument("--xml", help="default <repo>/build/agent-docs-xml")
     parser.add_argument("--html", action="store_true")
-    parser.add_argument("--html-out",
-                        default=str(REPO_ROOT / "build" / "llm-docs-html"))
+    parser.add_argument("--html-out", help="default <repo>/build/agent-docs-html")
     parser.add_argument("--open", action="store_true")
-    parser.add_argument("--base-url", default="https://pond.audio/eacp/latest",
-                        help="absolute prefix for the links in llms.txt")
     args = parser.parse_args()
+    load_config(Path(args.config).resolve())
+    args.out = args.out or str(REPO_ROOT / "build" / "agent-docs")
+    args.xml = args.xml or str(REPO_ROOT / "build" / "agent-docs-xml")
+    args.html_out = args.html_out or str(REPO_ROOT / "build" / "agent-docs-html")
     xml_dir = Path(args.xml).resolve()
     run_doxygen(xml_dir)
     headers, module_preambles_by_directory = collect_headers_and_module_preambles(xml_dir)
     generate_markdown_atomically(headers, module_preambles_by_directory,
-                                 Path(args.out).resolve(), args.base_url.rstrip("/"))
+                                 Path(args.out).resolve())
     if args.html:
         generate_html_reference(Path(args.html_out).resolve(), args.open)
 

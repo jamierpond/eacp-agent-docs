@@ -1,20 +1,28 @@
 #!/usr/bin/env bash
-# Creates, or brings up to date, everything the llm-docs workflow needs in GCP:
+# Creates, or brings up to date, everything the publish workflow needs in GCP:
 # a public-read bucket, a service account that may write only to it, and a
 # Workload Identity Federation pool whose provider accepts GitHub Actions
-# tokens from the listed repositories alone. Safe to run again.
+# tokens from the listed repositories alone. Safe to run again; the provider
+# accepts exactly the repositories of the latest run, so list them all.
 #
-# Usage: Scripts/setup-docs-bucket.sh   (as an account that owns the project;
-#        CLOUDSDK_CORE_ACCOUNT picks one other than gcloud's active account)
+# Usage: setup-gcp.sh <gcp-project> <bucket> <owner/repo>...
+#        (as an account that owns the project; CLOUDSDK_CORE_ACCOUNT picks one
+#        other than gcloud's active account. AGENT_DOCS_LOCATION sets the bucket
+#        location, default us.)
 set -euo pipefail
 
-project=${GCP_PROJECT:-pond-audio}
-bucket=gs://${EACP_DOCS_BUCKET:-eacp-docs}
-location=${EACP_DOCS_LOCATION:-us}
+if [[ $# -lt 3 ]]; then
+    echo "usage: $0 <gcp-project> <bucket> <owner/repo>..." >&2
+    exit 2
+fi
+project=$1
+bucket=gs://$2
+shift 2
+repositories=("$@")
+location=${AGENT_DOCS_LOCATION:-us}
 service_account_name=eacp-docs-publisher
 pool=github
 provider=github-actions
-repositories=(eyalamirmusic/eacp jamierpond/eacp)
 
 service_account=$service_account_name@$project.iam.gserviceaccount.com
 project_number=$(gcloud projects describe "$project" --format='value(projectNumber)')
@@ -34,7 +42,7 @@ gcloud storage buckets add-iam-policy-binding "$bucket" \
 
 if ! gcloud iam service-accounts describe "$service_account" --project "$project" > /dev/null 2>&1; then
     gcloud iam service-accounts create "$service_account_name" --project "$project" \
-        --display-name "eacp docs publisher (GitHub Actions)"
+        --display-name "agent docs publisher (GitHub Actions)"
 fi
 gcloud storage buckets add-iam-policy-binding "$bucket" \
     --member="serviceAccount:$service_account" --role=roles/storage.objectAdmin > /dev/null
@@ -66,6 +74,7 @@ for repository in "${repositories[@]}"; do
 done
 
 echo
-echo "Set these as repository variables (Settings > Secrets and variables > Actions > Variables):"
-echo "EACP_DOCS_WORKLOAD_IDENTITY_PROVIDER=$pool_path/providers/$provider"
-echo "EACP_DOCS_SERVICE_ACCOUNT=$service_account"
+echo "Set these as repository variables on each calling repository:"
+echo "AGENT_DOCS_WORKLOAD_IDENTITY_PROVIDER=$pool_path/providers/$provider"
+echo "AGENT_DOCS_SERVICE_ACCOUNT=$service_account"
+echo "AGENT_DOCS_BUCKET=${bucket#gs://}"

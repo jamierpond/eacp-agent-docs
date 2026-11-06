@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
-"""Checks that every relative link in the rendered docs (build/llm-docs/**/*.html)
+"""Checks that every relative link in the rendered docs (build/agent-docs/**/*.html)
 points at a file that exists, and that no page still links to a .md page.
 
-Usage: Scripts/check-llm-docs-links.py [docs-dir]
+Usage: check-links.py [docs-dir]   (default build/agent-docs under the current directory)
 """
 
 import re
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
 LINK = re.compile(r'href="([^"]*)"')
 
 
@@ -27,7 +26,7 @@ def find_broken_links(docs_dir):
 
 
 def main():
-    docs_dir = Path(sys.argv[1] if len(sys.argv) > 1 else REPO_ROOT / "build" / "llm-docs")
+    docs_dir = Path(sys.argv[1] if len(sys.argv) > 1 else Path.cwd() / "build" / "agent-docs")
     pages = list(docs_dir.rglob("*.html"))
     broken = find_broken_links(docs_dir)
     print("\n".join(broken))

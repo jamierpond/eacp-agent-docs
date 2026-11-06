@@ -1,13 +1,14 @@
-# Doc comments in eacp headers
+# Doc comments in headers
 
-Headers carry Doxygen comments so `Scripts/generate-llm-docs.py` can build the
-agent reference under `/llm-docs/`. Only public headers; no comments in `.cpp`.
+Headers carry Doxygen comments so `scripts/generate.py` can build the agent
+reference. Only public headers; no comments in `.cpp`.
 
 ## Module preamble
 
-The module's umbrella header (`Lib/eacp/<Module>/<Module>.h`) opens with a
-`@file` block: what the module is for, its main entry points, which platforms
-have it (the `EACP_HAS_*` gate), and the two or three rules an agent gets wrong
+The module's umbrella header (`<namespace_dir>/<Module>/<Module>.h`, or
+`<namespace_dir>/<namespace_dir>.h` for the root module) opens with a `@file`
+block: what the module is for, its main entry points, which platforms have it
+(the build gate, if any), and the two or three rules an agent gets wrong
 (threading, ownership, what to use instead). 5–15 lines.
 
 ```cpp
@@ -16,6 +17,9 @@ have it (the `EACP_HAS_*` gate), and the two or three rules an agent gets wrong
     thread unless it says otherwise. ...
 */
 ```
+
+A module with no umbrella header takes its preamble from a `/** @dir <path> ... */`
+block in a `.dox` file in its folder, the path written from the repository root.
 
 ## Per header
 

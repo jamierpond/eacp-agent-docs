@@ -1,0 +1,65 @@
+name: Publish agent docs
+
+on:
+  workflow_call:
+    inputs:
+      config:
+        description: Path of agent-docs.toml in the calling repository
+        type: string
+        default: agent-docs.toml
+      tools_ref:
+        description: Ref of jamierpond/eacp-agent-docs whose scripts run
+        type: string
+        default: v1
+      workload_identity_provider:
+        type: string
+        required: true
+      service_account:
+        type: string
+        required: true
+      bucket:
+        type: string
+        required: true
+
+jobs:
+  publish:
+    name: Build and publish agent docs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: jamierpond/eacp-agent-docs
+          ref: ${{ inputs.tools_ref }}
+          path: .agent-docs-tools
+
+      - name: Install Doxygen
+        run: .agent-docs-tools/scripts/install-doxygen.sh
+
+      - name: Generate docs
+        run: |
+          python3 -m pip install -r .agent-docs-tools/requirements.txt
+          python3 .agent-docs-tools/scripts/generate.py --config "${{ inputs.config }}" --out build/agent-docs
+          python3 .agent-docs-tools/scripts/check-links.py build/agent-docs
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ inputs.workload_identity_provider }}
+          service_account: ${{ inputs.service_account }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Publish
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          slug=$(python3 -c 'import sys, tomllib; c = tomllib.load(open(sys.argv[1], "rb")); print(c.get("slug", c["name"]))' "${{ inputs.config }}")
+          { read -r immutable; read -r aliases; } < <(.agent-docs-tools/scripts/refs-for-push.sh "$GITHUB_SHA" "$REF_TYPE" "$REF_NAME" "$DEFAULT_BRANCH")
+          .agent-docs-tools/scripts/publish.sh build/agent-docs "${{ inputs.bucket }}" "$slug" "$immutable" $aliases
+          echo "Published gs://${{ inputs.bucket }}/$slug/{$immutable${aliases:+ $aliases}}" >> "$GITHUB_STEP_SUMMARY"
