@@ -1097,8 +1097,11 @@ def render_task_symbol_link(symbol, symbol_lookup):
 
 
 def render_task_table(symbol_lookup):
+    rows = read_task_rows()
+    if not rows:
+        return []
     lines = ["## Find by task", "", "| task | symbols |", "|---|---|"]
-    for task, symbols in read_task_rows():
+    for task, symbols in rows:
         names = [name.strip().strip("`") for name in symbols.split(" + ")]
         links = [render_task_symbol_link(name, symbol_lookup) for name in names]
         lines.append(f"| {task} | {', '.join(links)} |")
@@ -1123,8 +1126,10 @@ def render_root_index(modules, module_preambles, symbol_lookup):
         "- Each header page lists its types, public members with their comments, "
         "free functions and the apps and tests that use them.", "",
     ]
-    lines += render_task_table(symbol_lookup)
-    lines += ["", "## Modules", ""]
+    task_table = render_task_table(symbol_lookup)
+    if task_table:
+        lines += task_table + [""]
+    lines += ["## Modules", ""]
     for module, module_headers in modules.items():
         summary = get_first_sentence(module_preambles[module]) or \
             f"{len(module_headers)} headers"
@@ -1213,8 +1218,9 @@ def render_llms_txt(modules, module_preambles, symbol_lookup):
         summary = get_first_sentence(module_preambles[module])
         lines.append(f"- [{module}]({module}/index.md)" +
                      (f": {summary}" if summary else ""))
-    lines += ["", "## Find by task", ""]
-    lines += render_llms_txt_task_lines(symbol_lookup)
+    task_lines = render_llms_txt_task_lines(symbol_lookup)
+    if task_lines:
+        lines += ["", "## Find by task", ""] + task_lines
     return "\n".join(lines) + "\n"
 
 
